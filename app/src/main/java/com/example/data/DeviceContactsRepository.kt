@@ -34,7 +34,7 @@ class DeviceContactsRepository(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) ==
             PackageManager.PERMISSION_GRANTED
 
-    suspend fun loadContacts(): List<DeviceContact> = withContext(Dispatchers.IO) {
+    suspend fun loadContacts(limit: Int = 2000): List<DeviceContact> = withContext(Dispatchers.IO) {
         if (!hasReadContactsPermission()) return@withContext emptyList()
         val contactsMap = LinkedHashMap<String, DeviceContact>()
         val projection = arrayOf(
@@ -58,7 +58,7 @@ class DeviceContactsRepository(private val context: Context) {
                 val photoIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_URI)
                 val starIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.STARRED)
 
-                while (cursor.moveToNext()) {
+                while (cursor.moveToNext() && contactsMap.size < limit) {
                     val contactId = if (idIdx >= 0) cursor.getString(idIdx) ?: "" else ""
                     val name = if (nameIdx >= 0) cursor.getString(nameIdx)?.trim() ?: "" else ""
                     val rawNumber = if (numIdx >= 0) cursor.getString(numIdx)?.trim() ?: "" else ""

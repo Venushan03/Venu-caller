@@ -17,23 +17,26 @@ object PhoneUtils {
         return "%02d:%02d".format(mins, secs)
     }
 
-    private val t9Map = mapOf(
-        'A' to '2', 'B' to '2', 'C' to '2',
-        'D' to '3', 'E' to '3', 'F' to '3',
-        'G' to '4', 'H' to '4', 'I' to '4',
-        'J' to '5', 'K' to '5', 'L' to '5',
-        'M' to '6', 'N' to '6', 'O' to '6',
-        'P' to '7', 'Q' to '7', 'R' to '7', 'S' to '7',
-        'T' to '8', 'U' to '8', 'V' to '8',
-        'W' to '9', 'X' to '9', 'Y' to '9', 'Z' to '9'
-    )
+    private fun t9DigitOrNull(ch: Char): Char? = when (ch) {
+        'a', 'b', 'c', 'A', 'B', 'C' -> '2'
+        'd', 'e', 'f', 'D', 'E', 'F' -> '3'
+        'g', 'h', 'i', 'G', 'H', 'I' -> '4'
+        'j', 'k', 'l', 'J', 'K', 'L' -> '5'
+        'm', 'n', 'o', 'M', 'N', 'O' -> '6'
+        'p', 'q', 'r', 's', 'P', 'Q', 'R', 'S' -> '7'
+        't', 'u', 'v', 'T', 'U', 'V' -> '8'
+        'w', 'x', 'y', 'z', 'W', 'X', 'Y', 'Z' -> '9'
+        else -> null
+    }
 
     fun toT9Digits(text: String): String {
         val sb = StringBuilder(text.length)
-        for (ch in text.uppercase()) {
-            when {
-                ch.isDigit() -> sb.append(ch)
-                t9Map.containsKey(ch) -> sb.append(t9Map[ch])
+        for (i in 0 until text.length) {
+            val ch = text[i]
+            if (ch in '0'..'9') {
+                sb.append(ch)
+            } else {
+                t9DigitOrNull(ch)?.let { sb.append(it) }
             }
         }
         return sb.toString()
@@ -41,15 +44,21 @@ object PhoneUtils {
 
     fun matchesDialQuery(query: String, name: String, number: String): Boolean {
         if (query.isBlank()) return false
-        val normalizedQuery = query.filter { it.isDigit() || it == '+' }
-        val numberDigits = number.filter { it.isDigit() }
-        if (normalizedQuery.isNotBlank() && numberDigits.contains(normalizedQuery.trimStart('+'))) {
-            return true
+        val qDigits = buildString(query.length) {
+            for (i in 0 until query.length) {
+                val c = query[i]
+                if (c in '0'..'9') append(c)
+            }
         }
-        val t9Name = toT9Digits(name)
-        val digitsOnly = query.filter { it.isDigit() }
-        if (digitsOnly.isNotEmpty() && t9Name.contains(digitsOnly)) {
-            return true
+        if (qDigits.isNotEmpty()) {
+            val numDigits = buildString(number.length) {
+                for (i in 0 until number.length) {
+                    val c = number[i]
+                    if (c in '0'..'9') append(c)
+                }
+            }
+            if (numDigits.contains(qDigits)) return true
+            if (toT9Digits(name).contains(qDigits)) return true
         }
         return name.contains(query, ignoreCase = true)
     }

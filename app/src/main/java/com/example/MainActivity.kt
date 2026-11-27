@@ -109,6 +109,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        configureAppCheck(this, intent)
+    }
+
     private fun extractTelFromIntent(intent: Intent?): String? {
         val data = intent?.data ?: return null
         return if (data.scheme == "tel") data.schemeSpecificPart else null

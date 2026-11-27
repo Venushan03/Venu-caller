@@ -60,9 +60,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -549,6 +549,8 @@ fun DialerScreen(
     }
 }
 
+private val DialKeyShape = RoundedCornerShape(20.dp)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PrismaticDialKey(
@@ -561,27 +563,29 @@ private fun PrismaticDialKey(
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.93f else 1f,
-        animationSpec = spring(dampingRatio = 0.55f, stiffness = 600f),
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 700f),
         label = "keyScale"
     )
+    val idleBrush = remember(spec.color) {
+        Brush.verticalGradient(colors = listOf(spec.color.copy(alpha = 0.16f), CyberSurface))
+    }
+    val pressedBrush = remember(spec.color) {
+        Brush.verticalGradient(colors = listOf(spec.color.copy(alpha = 0.34f), CyberSurface))
+    }
 
     Box(
         modifier = modifier
-            .scale(scale)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .height(66.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        spec.color.copy(alpha = if (pressed) 0.34f else 0.16f),
-                        CyberSurface
-                    )
-                )
-            )
+            .clip(DialKeyShape)
+            .background(if (pressed) pressedBrush else idleBrush)
             .border(
                 width = if (pressed) 2.dp else 1.2.dp,
                 color = spec.color.copy(alpha = if (pressed) 0.95f else 0.55f),
-                shape = RoundedCornerShape(20.dp)
+                shape = DialKeyShape
             )
             .combinedClickable(
                 interactionSource = interactionSource,

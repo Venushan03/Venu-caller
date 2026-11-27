@@ -140,6 +140,12 @@ fun ContactsScreen(
     }
 
     val callerTags = (tagsState as? UiState.Success)?.data.orEmpty()
+    val tagsByNumber = remember(callerTags) {
+        callerTags.associateBy { it.normalizedNumber }
+    }
+    val dateFormatter = remember {
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+    }
     val starredContacts = remember(contacts) { contacts.filter { it.starred } }
     val filteredContacts = remember(contacts, searchQuery) {
         if (searchQuery.isBlank()) contacts
@@ -307,8 +313,8 @@ fun ContactsScreen(
                                 )
                             }
                         } else {
-                            items(filteredContacts, key = { it.id }) { contact ->
-                                val tag = callerTags.firstOrNull { it.normalizedNumber == contact.normalizedNumber }
+                            items(filteredContacts, key = { it.id }, contentType = { "contact" }) { contact ->
+                                val tag = tagsByNumber[contact.normalizedNumber]
                                 ContactRowCard(
                                     contact = contact,
                                     tag = tag,
@@ -330,11 +336,12 @@ fun ContactsScreen(
                                 )
                             }
                         } else {
-                            items(filteredLogs, key = { it.id }) { log ->
-                                val tag = callerTags.firstOrNull { it.normalizedNumber == log.normalizedNumber }
+                            items(filteredLogs, key = { it.id }, contentType = { "call_log" }) { log ->
+                                val tag = tagsByNumber[log.normalizedNumber]
                                 CallLogRowCard(
                                     entry = log,
                                     tag = tag,
+                                    dateFormatter = dateFormatter,
                                     onCall = { viewModel.placeCall(log.number) },
                                     onIdentifyOrTag = {
                                         tagTargetNumber = log.number to (tag?.displayName ?: log.cachedName ?: "Unknown Caller")
@@ -347,7 +354,7 @@ fun ContactsScreen(
                         }
                     }
                     else -> {
-                        item {
+                        item(contentType = "add_tag_header") {
                             OutlinedButton(
                                 onClick = { tagTargetNumber = "+1 800-555-0199" to "Custom Tag" },
                                 modifier = Modifier.fillMaxWidth()
@@ -357,7 +364,7 @@ fun ContactsScreen(
                                 Text("Add Custom Caller ID Tag / Block Number")
                             }
                         }
-                        items(callerTags, key = { it.id }) { tag ->
+                        items(callerTags, key = { it.id }, contentType = { "caller_tag" }) { tag ->
                             CallerTagCard(
                                 tag = tag,
                                 onCall = { viewModel.placeCall(tag.phoneNumber) },
@@ -471,6 +478,7 @@ private fun ContactRowCard(
 private fun CallLogRowCard(
     entry: CallLogEntry,
     tag: CallerTag?,
+    dateFormatter: DateFormat,
     onCall: () -> Unit,
     onIdentifyOrTag: () -> Unit,
     onSimulateIncoming: () -> Unit
@@ -480,8 +488,8 @@ private fun CallLogRowCard(
         CallDirection.MISSED, CallDirection.REJECTED -> Icons.AutoMirrored.Rounded.CallMissed to NeonCrimson
         CallDirection.INCOMING -> Icons.AutoMirrored.Rounded.CallReceived to NeonEmerald
     }
-    val dateLabel = remember(entry.timestampMillis) {
-        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.timestampMillis))
+    val dateLabel = remember(entry.timestampMillis, dateFormatter) {
+        dateFormatter.format(Date(entry.timestampMillis))
     }
 
     Surface(

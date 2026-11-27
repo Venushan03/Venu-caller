@@ -22,8 +22,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -147,9 +149,16 @@ class VoiceChangerEngine(private val context: Context) {
 
         captureJob = scope.launch {
             val inputBuffer = ShortArray(chunkFrames)
+            val outputBuffer = ShortArray(chunkFrames)
+            val byteScratch = ByteArray(chunkFrames * 2)
+            val hannWeights = FloatArray(chunkFrames) { idx ->
+                val winPos = idx.toDouble() / chunkFrames
+                (0.5 * (1.0 - cos(2.0 * PI * winPos))).toFloat()
+            }
             val recordedBytes = if (recordClip) ByteArrayOutputStream() else null
             var prevLowPass = 0f
             var phase = 0.0
+            var lastUiEmitMs = 0L
 
             try {
                 recorder.startRecording()
@@ -159,34 +168,76 @@ class VoiceChangerEngine(private val context: Context) {
                     val read = recorder.read(inputBuffer, 0, chunkFrames)
                     if (read > 0) {
                         val preset = _activePreset.value
-                        val processed = applyVoiceEffect(
-                            input = inputBuffer,
-                            length = read,
-                            preset = preset,
-                            prevLowPassRef = { prevLowPass }.also {},
-                            updateLowPass = { prevLowPass = it },
-                            phaseRef = phase,
-                            updatePhase = { phase = it }
-                        )
+                        if (preset == VoicePreset.ORIGINAL) {
+                            System.arraycopy(inputBuffer, 0, outputBuffer, 0, read)
+                        } else {
+                            val pitch = preset.pitchFactor
+                            val grainSize = read.toDouble()
+                            val tremoloDepth = preset.tremoloDepth
+                            val warmthFilter = preset.warmthFilter
+                            val alpha = if (warmthFilter > 0f) 1f - warmthFilter.coerceIn(0f, 0.75f) else 1f
+                            val useFullHann = read == chunkFrames
 
-                        // Compute RMS for live neon waveform
-                        var sumSq = 0.0
-                        for (sample in processed) {
-                            val norm = sample / 32768.0
-                            sumSq += norm * norm
+                            for (i in 0 until read) {
+                                val offsetA = (i * pitch) % read
+                                val offsetB = (offsetA + grainSize * 0.5) % read
+
+                                val idxA0 = offsetA.toInt().coerceIn(0, read - 1)
+                                val idxA1 = (idxA0 + 1).coerceAtMost(read - 1)
+                                val fracA = (offsetA - idxA0).toFloat()
+                                val sampleA = inputBuffer[idxA0] * (1f - fracA) + inputBuffer[idxA1] * fracA
+
+                                val idxB0 = offsetB.toInt().coerceIn(0, read - 1)
+                                val idxB1 = (idxB0 + 1).coerceAtMost(read - 1)
+                                val fracB = (offsetB - idxB0).toFloat()
+                                val sampleB = inputBuffer[idxB0] * (1f - fracB) + inputBuffer[idxB1] * fracB
+
+                                val weightA = if (useFullHann) {
+                                    hannWeights[i]
+                                } else {
+                                    (0.5 * (1.0 - cos(2.0 * PI * (i.toDouble() / read)))).toFloat()
+                                }
+                                var sample = sampleA * weightA + sampleB * (1f - weightA)
+
+                                if (tremoloDepth > 0f) {
+                                    phase += (2.0 * PI * 6.5) / SAMPLE_RATE
+                                    sample *= 1f - tremoloDepth * (0.5f + 0.5f * sin(phase).toFloat())
+                                }
+
+                                if (warmthFilter > 0f) {
+                                    prevLowPass += alpha * (sample - prevLowPass)
+                                    sample = prevLowPass
+                                }
+
+                                outputBuffer[i] = sample.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                            }
+                            if (phase > 2.0 * PI) {
+                                phase %= (2.0 * PI)
+                            }
                         }
-                        val rms = sqrt(sumSq / processed.size.coerceAtLeast(1)).toFloat()
-                        _amplitudeLevel.value = (rms * 3.5f).coerceIn(0f, 1f)
 
-                        track?.write(processed, 0, processed.size)
+                        // Throttle UI waveform updates (~20Hz) to save GPU redraws on budget devices
+                        val nowMs = android.os.SystemClock.uptimeMillis()
+                        if (nowMs - lastUiEmitMs >= 45L) {
+                            lastUiEmitMs = nowMs
+                            var sumSq = 0.0
+                            for (i in 0 until read) {
+                                val norm = outputBuffer[i] / 32768.0
+                                sumSq += norm * norm
+                            }
+                            val rms = sqrt(sumSq / read.coerceAtLeast(1)).toFloat()
+                            _amplitudeLevel.value = (rms * 3.5f).coerceIn(0f, 1f)
+                        }
+
+                        track?.write(outputBuffer, 0, read)
 
                         if (recordedBytes != null) {
-                            val byteBuf = ByteBuffer.allocate(processed.size * 2)
-                                .order(ByteOrder.LITTLE_ENDIAN)
-                            for (s in processed) {
-                                byteBuf.putShort(s)
+                            for (i in 0 until read) {
+                                val s = outputBuffer[i].toInt()
+                                byteScratch[i * 2] = (s and 0xff).toByte()
+                                byteScratch[i * 2 + 1] = ((s shr 8) and 0xff).toByte()
                             }
-                            recordedBytes.write(byteBuf.array())
+                            recordedBytes.write(byteScratch, 0, read * 2)
                         }
                     }
                 }
@@ -238,9 +289,7 @@ class VoiceChangerEngine(private val context: Context) {
             _isPlayingClip.value = true
             var track: AudioTrack? = null
             try {
-                val allBytes = clipFile.readBytes()
-                if (allBytes.size <= 44) return@launch
-                val pcmBytes = allBytes.copyOfRange(44, allBytes.size)
+                if (clipFile.length() <= 44L) return@launch
                 val outMin = AudioTrack.getMinBufferSize(
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_OUT_MONO,
@@ -266,20 +315,26 @@ class VoiceChangerEngine(private val context: Context) {
                     .build()
 
                 track.play()
-                val step = 1280
-                var offset = 0
-                while (isActive && offset < pcmBytes.size) {
-                    val len = minOf(step, pcmBytes.size - offset)
-                    track.write(pcmBytes, offset, len)
-                    // Update waveform amplitude during playback
-                    var peak = 0
-                    val bb = ByteBuffer.wrap(pcmBytes, offset, len).order(ByteOrder.LITTLE_ENDIAN)
-                    while (bb.remaining() >= 2) {
-                        val s = abs(bb.short.toInt())
-                        if (s > peak) peak = s
+                val buf = ByteArray(1280)
+                BufferedInputStream(FileInputStream(clipFile)).use { input ->
+                    var skipped = 0L
+                    while (skipped < 44L) {
+                        val s = input.skip(44L - skipped)
+                        if (s <= 0) break
+                        skipped += s
                     }
-                    _amplitudeLevel.value = (peak / 32768f * 1.4f).coerceIn(0f, 1f)
-                    offset += len
+                    while (isActive) {
+                        val len = input.read(buf)
+                        if (len <= 0) break
+                        track.write(buf, 0, len)
+                        var peak = 0
+                        val bb = ByteBuffer.wrap(buf, 0, len).order(ByteOrder.LITTLE_ENDIAN)
+                        while (bb.remaining() >= 2) {
+                            val s = abs(bb.short.toInt())
+                            if (s > peak) peak = s
+                        }
+                        _amplitudeLevel.value = (peak / 32768f * 1.4f).coerceIn(0f, 1f)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -306,70 +361,7 @@ class VoiceChangerEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Granular dual-grain Hann-windowed pitch shifter + optional elder tremolo & warmth filter.
-     * Preserves frame duration while shifting perceived pitch & timbre cleanly in real time.
-     */
-    private fun applyVoiceEffect(
-        input: ShortArray,
-        length: Int,
-        preset: VoicePreset,
-        prevLowPassRef: () -> Float,
-        updateLowPass: (Float) -> Unit,
-        phaseRef: Double,
-        updatePhase: (Double) -> Unit
-    ): ShortArray {
-        if (preset == VoicePreset.ORIGINAL) {
-            return input.copyOf(length)
-        }
 
-        val out = ShortArray(length)
-        val pitch = preset.pitchFactor
-        val grainSize = length.toDouble()
-        var currentPhase = phaseRef
-        var lowPass = prevLowPassRef()
-
-        for (i in 0 until length) {
-            // Dual-tap crossfading granular pitch reader to avoid boundary clicks
-            val offsetA = ((i * pitch) % length).toDouble()
-            val offsetB = ((offsetA + grainSize * 0.5) % length)
-
-            val idxA0 = offsetA.toInt().coerceIn(0, length - 1)
-            val idxA1 = (idxA0 + 1).coerceAtMost(length - 1)
-            val fracA = (offsetA - idxA0).toFloat()
-            val sampleA = input[idxA0] * (1f - fracA) + input[idxA1] * fracA
-
-            val idxB0 = offsetB.toInt().coerceIn(0, length - 1)
-            val idxB1 = (idxB0 + 1).coerceAtMost(length - 1)
-            val fracB = (offsetB - idxB0).toFloat()
-            val sampleB = input[idxB0] * (1f - fracB) + input[idxB1] * fracB
-
-            val winPos = (i.toDouble() / length)
-            val weightA = (0.5 * (1.0 - cos(2.0 * PI * winPos))).toFloat()
-            val weightB = 1f - weightA
-            var sample = sampleA * weightA + sampleB * weightB
-
-            // Optional elder vocal tremolo (~6.5Hz vibrato)
-            if (preset.tremoloDepth > 0f) {
-                currentPhase += (2.0 * PI * 6.5) / SAMPLE_RATE
-                val mod = 1f - preset.tremoloDepth * (0.5f + 0.5f * sin(currentPhase).toFloat())
-                sample *= mod
-            }
-
-            // Optional warmth low-pass smoothing
-            if (preset.warmthFilter > 0f) {
-                val alpha = 1f - preset.warmthFilter.coerceIn(0f, 0.75f)
-                lowPass = lowPass + alpha * (sample - lowPass)
-                sample = lowPass
-            }
-
-            out[i] = sample.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-        }
-
-        updateLowPass(lowPass)
-        updatePhase(currentPhase % (2.0 * PI))
-        return out
-    }
 
     private fun writeWavFile(file: File, pcmData: ByteArray, sampleRate: Int) {
         val totalDataLen = pcmData.size + 36

@@ -10,11 +10,14 @@ import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
 private const val TAG = "GeminiDialerRepo"
+private const val FAST_MODEL_NAME = "gemini-3.5-flash-lite"
 private const val MODEL_NAME = "gemini-3.8-flash"
 private const val TIMEOUT_MS = 60_000L
 
@@ -102,36 +105,47 @@ class GeminiDialerRepository {
 
     private val lookupModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
+            modelName = FAST_MODEL_NAME,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = lookupSchema
+                temperature = 0.2f
+                maxOutputTokens = 512
             }
         )
     }
 
     private val commandModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
+            modelName = FAST_MODEL_NAME,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = commandSchema
+                temperature = 0.2f
+                maxOutputTokens = 512
             }
         )
     }
 
     private val quickRepliesModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
+            modelName = FAST_MODEL_NAME,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = quickRepliesSchema
+                temperature = 0.4f
+                maxOutputTokens = 256
             }
         )
     }
 
     private val textModel by lazy {
-        Firebase.ai.generativeModel(modelName = MODEL_NAME)
+        Firebase.ai.generativeModel(
+            modelName = MODEL_NAME,
+            generationConfig = generationConfig {
+                maxOutputTokens = 256
+            }
+        )
     }
 
     suspend fun analyzeUnknownNumber(
@@ -145,10 +159,11 @@ class GeminiDialerRepository {
             IMPORTANT: Never fabricate a private individual's personal full name if it cannot be verified from the number pattern; instead give an honest descriptive label like "India Mobile (+91)" or "US Toll-Free Line" or "Potential Robocall Pattern".
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            lookupModel.generateContent(prompt)
-        }
-        val raw = response.text ?: throw IllegalStateException("Empty response from Gemini")
+        val raw = withContext(Dispatchers.IO) {
+            withTimeout(TIMEOUT_MS) {
+                lookupModel.generateContent(prompt).text
+            }
+        } ?: throw IllegalStateException("Empty response from Gemini")
         val json = JSONObject(raw)
         Result.success(
             CallerLookupResult(
@@ -163,8 +178,8 @@ class GeminiDialerRepository {
             )
         )
     } catch (e: TimeoutCancellationException) {
-        Log.e(TAG, "Unknown number lookup timed out", e)
-        Result.failure(Exception("Caller lookup timed out. Please try again."))
+        Log.e(TAG, "Unknown number lookup timed out after ${TIMEOUT_MS}ms", e)
+        Result.failure(Exception("Caller lookup timed out. Check connection and try again."))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -182,10 +197,10 @@ class GeminiDialerRepository {
             User request: "$query"
 
             Available device contacts (subset):
-            $contactsSummary
+            ${contactsSummary.ifBlank { "None" }}
 
             Saved number notes (subset):
-            $notesSummary
+            ${notesSummary.ifBlank { "None" }}
 
             Rules:
             - If the user asks to call someone or a number, return CALL_CONTACT with targetNumber and targetName.
@@ -197,10 +212,11 @@ class GeminiDialerRepository {
             - Otherwise return ANSWER_INFO with a helpful assistantMessage.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            commandModel.generateContent(prompt)
-        }
-        val raw = response.text ?: throw IllegalStateException("Empty response from Gemini")
+        val raw = withContext(Dispatchers.IO) {
+            withTimeout(TIMEOUT_MS) {
+                commandModel.generateContent(prompt).text
+            }
+        } ?: throw IllegalStateException("Empty response from Gemini")
         val json = JSONObject(raw)
         val rawIntent = json.optString("intentType", "ANSWER_INFO")
         val intent = DialerIntentType.entries.firstOrNull { it.name == rawIntent }
@@ -217,8 +233,8 @@ class GeminiDialerRepository {
             )
         )
     } catch (e: TimeoutCancellationException) {
-        Log.e(TAG, "Dialer command timed out", e)
-        Result.failure(Exception("Gemini assistant timed out. Please try again."))
+        Log.e(TAG, "Dialer command timed out after ${TIMEOUT_MS}ms", e)
+        Result.failure(Exception("Gemini assistant timed out. Check connection and try again."))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -231,18 +247,23 @@ class GeminiDialerRepository {
             Polish and organize this quick phone call note for "$callerLabel" into a clean, concise note with key details and any action items (under 80 words):
             "$rawNote"
         """.trimIndent()
-        val response = withTimeout(TIMEOUT_MS) {
-            textModel.generateContent(prompt)
+        val text = withContext(Dispatchers.IO) {
+            withTimeout(TIMEOUT_MS) {
+                val sb = StringBuilder()
+                textModel.generateContentStream(prompt).collect { chunk ->
+                    sb.append(chunk.text.orEmpty())
+                }
+                sb.toString().trim()
+            }
         }
-        val text = response.text?.trim()
-        if (text.isNullOrBlank()) {
+        if (text.isBlank()) {
             Result.failure(IllegalStateException("Gemini returned an empty summary."))
         } else {
             Result.success(text)
         }
     } catch (e: TimeoutCancellationException) {
-        Log.e(TAG, "Note polish timed out", e)
-        Result.failure(Exception("Note polish timed out."))
+        Log.e(TAG, "Note polish timed out after ${TIMEOUT_MS}ms", e)
+        Result.failure(Exception("Note polish timed out. Check connection and try again."))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -253,12 +274,13 @@ class GeminiDialerRepository {
     suspend fun generateQuickReplies(callerLabel: String, noteContext: String): Result<List<String>> = try {
         val prompt = """
             Generate 3 short, natural SMS quick-replies (each under 12 words) when declining or screening an incoming call from "$callerLabel".
-            Context from saved notes: "$noteContext"
+            Context from saved notes: "${noteContext.ifBlank { "None" }}"
         """.trimIndent()
-        val response = withTimeout(TIMEOUT_MS) {
-            quickRepliesModel.generateContent(prompt)
-        }
-        val raw = response.text ?: throw IllegalStateException("Empty response from Gemini")
+        val raw = withContext(Dispatchers.IO) {
+            withTimeout(TIMEOUT_MS) {
+                quickRepliesModel.generateContent(prompt).text
+            }
+        } ?: throw IllegalStateException("Empty response from Gemini")
         val json = JSONObject(raw)
         val arr = json.optJSONArray("replies")
         val list = mutableListOf<String>()
@@ -279,8 +301,8 @@ class GeminiDialerRepository {
         }
         Result.success(list)
     } catch (e: TimeoutCancellationException) {
-        Log.e(TAG, "Quick replies timed out", e)
-        Result.failure(Exception("Quick reply generation timed out."))
+        Log.e(TAG, "Quick replies timed out after ${TIMEOUT_MS}ms", e)
+        Result.failure(Exception("Quick reply generation timed out. Check connection and try again."))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

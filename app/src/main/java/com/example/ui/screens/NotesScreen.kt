@@ -233,7 +233,7 @@ fun NotesScreen(
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                                 contentPadding = PaddingValues(bottom = 80.dp)
                             ) {
-                                items(filteredNotes, key = { it.id }) { note ->
+                                items(filteredNotes, key = { it.id }, contentType = { "number_note" }) { note ->
                                     NumberNoteCard(
                                         note = note,
                                         onEdit = {

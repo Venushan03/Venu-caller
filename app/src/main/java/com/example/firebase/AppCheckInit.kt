@@ -9,12 +9,16 @@ import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 private const val TAG = "AppCheckInit"
 
 private const val DEBUG_TOKEN_EXTRA = "FIREBASE_APPCHECK_DEBUG_TOKEN"
 private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store."
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
+
+private val providerFactoryInstalled = AtomicBoolean(false)
 
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
@@ -39,28 +43,32 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 Log.w(TAG, "No debug token found in Intent extra.")
             }
 
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            if (providerFactoryInstalled.compareAndSet(false, true)) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
+                Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            }
         } else {
-            val resId = context.resources.getIdentifier(
-                RECAPTCHA_SITE_KEY_RES,
-                "string",
-                context.packageName
-            )
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
+            if (providerFactoryInstalled.compareAndSet(false, true)) {
+                val resId = context.resources.getIdentifier(
+                    RECAPTCHA_SITE_KEY_RES,
+                    "string",
+                    context.packageName
+                )
+                if (resId != 0) {
+                    val siteKey = context.getString(resId)
+                    if (siteKey.isNotBlank()) {
+                        FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                            RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                        )
+                        Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
+                    } else {
+                        Log.e(TAG, "recaptcha_site_key resource string is blank.")
+                    }
                 } else {
-                    Log.e(TAG, "recaptcha_site_key resource string is blank.")
+                    Log.e(TAG, "recaptcha_site_key string resource not found in package.")
                 }
-            } else {
-                Log.e(TAG, "recaptcha_site_key string resource not found in package.")
             }
         }
     } catch (e: Exception) {

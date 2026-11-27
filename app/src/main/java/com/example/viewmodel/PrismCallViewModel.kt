@@ -33,12 +33,15 @@ import com.example.telecom.CallCoordinator
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -130,10 +133,16 @@ class PrismCallViewModel(
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
+    private var callerLookupJob: Job? = null
+    private var geminiCommandJob: Job? = null
+    private var notePolishJob: Job? = null
+
     val matchingContacts: StateFlow<List<DeviceContact>> = combine(_dialedNumber, _contacts) { query, list ->
         if (query.isBlank()) emptyList()
         else list.filter { PhoneUtils.matchesDialQuery(query, it.name, it.phoneNumber) }.take(5)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     // Voice Studio delegated state
     val voicePreset: StateFlow<VoicePreset> = voiceEngine.activePreset
@@ -317,7 +326,8 @@ class PrismCallViewModel(
             _toastMessage.value = "Type a phone number to identify"
             return
         }
-        viewModelScope.launch {
+        callerLookupJob?.cancel()
+        callerLookupJob = viewModelScope.launch {
             _callerLookupState.value = UiState.Loading
             geminiRepo.analyzeUnknownNumber(target, "Manual Lookup")
                 .onSuccess { res -> _callerLookupState.value = UiState.Success(res) }
@@ -328,13 +338,15 @@ class PrismCallViewModel(
     }
 
     fun clearCallerLookup() {
+        callerLookupJob?.cancel()
         _callerLookupState.value = UiState.Success(null)
     }
 
     fun runGeminiCommand(query: String, onNavigateTab: (String) -> Unit, onOpenNoteForNumber: (String, String?) -> Unit) {
         val clean = query.trim()
         if (clean.isBlank()) return
-        viewModelScope.launch {
+        geminiCommandJob?.cancel()
+        geminiCommandJob = viewModelScope.launch {
             _geminiCommandState.value = UiState.Loading
             val contactsSummary = _contacts.value.take(25).joinToString("\n") { "${it.name}: ${it.phoneNumber}" }
             val notes = (notesState.value as? UiState.Success)?.data.orEmpty()
@@ -375,6 +387,7 @@ class PrismCallViewModel(
     }
 
     fun clearGeminiCommand() {
+        geminiCommandJob?.cancel()
         _geminiCommandState.value = UiState.Success(null)
     }
 
@@ -383,7 +396,8 @@ class PrismCallViewModel(
             _toastMessage.value = "Write a few words first to polish with Gemini"
             return
         }
-        viewModelScope.launch {
+        notePolishJob?.cancel()
+        notePolishJob = viewModelScope.launch {
             _notePolishState.value = UiState.Loading
             geminiRepo.summarizeAndPolishNote(rawNote, callerLabel)
                 .onSuccess { polished ->
