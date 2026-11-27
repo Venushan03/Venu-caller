@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">PrismCall</string>
+    <string name="incall_screen_label">PrismCall Attendant</string>
+    <string name="auth_headline">PrismCall</string>
+    <string name="auth_subtitle">Neon Cyber Dialer, Caller ID, Voice FX Studio &amp; Gemini Assistant</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="tab_dialer">Dialer</string>
+    <string name="tab_contacts">Contacts</string>
+    <string name="tab_notes">Notepad</string>
+    <string name="tab_studio">Voice FX</string>
+    <string name="gemini_prompt_hint">Ask Gemini: "Call Mom", "Identify +1800...", "Find gate note"</string>
+    <string name="voice_disclaimer">Android OS blocks third-party apps from altering live cellular carrier call audio. Use Voice Studio for real-time mic monitoring, voice clips, and VoIP/speaker preview.</string>
+</resources>

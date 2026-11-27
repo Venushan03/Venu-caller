@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidNumberNote(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 1 && data.phoneNumber.size() <= 40 &&
+             data.normalizedNumber is string && data.normalizedNumber.size() >= 1 && data.normalizedNumber.size() <= 32 &&
+             (!('contactName' in data) || (data.contactName is string && data.contactName.size() <= 80)) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+             data.body is string && data.body.size() <= 1500 &&
+             data.tags is list && data.tags.size() <= 10 &&
+             (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 30)) &&
+             data.pinned is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCallerTag(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 1 && data.phoneNumber.size() <= 40 &&
+             data.normalizedNumber is string && data.normalizedNumber.size() >= 1 && data.normalizedNumber.size() <= 32 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.category in ['VIP', 'Work', 'Delivery', 'Business', 'Friend', 'Spam', 'Other'] &&
+             data.blocked is bool &&
+             (!('aiSummary' in data) || (data.aiSummary is string && data.aiSummary.size() <= 500)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/numberNotes/{noteId} {
+      allow get: if isOwner(userId) && isValidId(noteId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(noteId) &&
+                       incoming().keys().hasAll(['userId', 'phoneNumber', 'normalizedNumber', 'title', 'body', 'tags', 'pinned', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'phoneNumber', 'normalizedNumber', 'contactName', 'title', 'body', 'tags', 'pinned', 'createdAt', 'updatedAt']) &&
+                       isValidNumberNote(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(noteId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidNumberNote(incoming(), userId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'normalizedNumber', 'contactName', 'title', 'body', 'tags', 'pinned', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(noteId);
+    }
+
+    match /users/{userId}/callerTags/{tagId} {
+      allow get: if isOwner(userId) && isValidId(tagId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(tagId) &&
+                       incoming().keys().hasAll(['userId', 'phoneNumber', 'normalizedNumber', 'displayName', 'category', 'blocked', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'phoneNumber', 'normalizedNumber', 'displayName', 'category', 'blocked', 'aiSummary', 'createdAt', 'updatedAt']) &&
+                       isValidCallerTag(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(tagId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidCallerTag(incoming(), userId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'normalizedNumber', 'displayName', 'category', 'blocked', 'aiSummary', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(tagId);
+    }
+  }
+}

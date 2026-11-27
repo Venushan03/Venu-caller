@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "NumberNote": {
+      "title": "NumberNote",
+      "description": "User-authored note pinned to a phone number or contact, synced per authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "phoneNumber": { "type": "string", "description": "Formatted phone number associated with the note." },
+        "normalizedNumber": { "type": "string", "description": "Digits-only or E.164 normalized number for fast matching." },
+        "contactName": { "type": "string", "description": "Optional resolved contact or caller name." },
+        "title": { "type": "string", "description": "Short title or reminder headline." },
+        "body": { "type": "string", "description": "Detailed call note or follow-up details." },
+        "tags": { "type": "array", "description": "Bounded list of up to 10 short label tags." },
+        "pinned": { "type": "boolean", "description": "Whether the note is pinned for quick display." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp updated via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "phoneNumber", "normalizedNumber", "title", "body", "tags", "pinned", "createdAt", "updatedAt"]
+    },
+    "CallerTag": {
+      "title": "CallerTag",
+      "description": "Custom caller identification label, category, and block preference for an unknown or saved number.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "phoneNumber": { "type": "string", "description": "Display phone number." },
+        "normalizedNumber": { "type": "string", "description": "Normalized key for lookup." },
+        "displayName": { "type": "string", "description": "Identified or user-assigned caller name." },
+        "category": { "type": "string", "enum": ["VIP", "Work", "Delivery", "Business", "Friend", "Spam", "Other"], "description": "Caller classification category." },
+        "blocked": { "type": "boolean", "description": "Whether incoming calls from this number should be screened/blocked." },
+        "aiSummary": { "type": "string", "description": "Optional Gemini number intelligence summary." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp updated via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "phoneNumber", "normalizedNumber", "displayName", "category", "blocked", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/numberNotes/{noteId}": {
+      "schema": { "$ref": "#/entities/NumberNote" },
+      "description": "User-isolated collection of phone-number-linked notes."
+    },
+    "/users/{userId}/callerTags/{tagId}": {
+      "schema": { "$ref": "#/entities/CallerTag" },
+      "description": "User-isolated collection of custom caller ID tags and block rules."
+    }
+  }
+}

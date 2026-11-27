@@ -1,0 +1,6 @@
+{
+  "name": "PrismCall",
+  "description": "Neon cyber dialer and contacts app with colorful keypad, swipe call attendant, unknown caller lookup, voice changer studio, cloud number notes, and Gemini quick access.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
