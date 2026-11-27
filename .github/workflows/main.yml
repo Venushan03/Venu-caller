@@ -1,7 +1,7 @@
 name: VENU Caller APK Build
 
 on:
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -29,6 +29,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          android: true
 
       - name: Generate Gradle Wrapper (if missing)
         run: |
@@ -37,11 +39,9 @@ jobs:
             gradle wrapper
           fi
           chmod +x gradlew
-          chmod +x gradlew.bat
 
       - name: Build Debug APK
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         if: success()
@@ -51,3 +51,4 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+          
