@@ -1,0 +1,382 @@
+name: Build VENU AI DIALER APK
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Generate project files
+        run: |
+          cat > settings.gradle.kts <<'VENU_EOF'
+          pluginManagement { repositories { google(); maven("https://maven-central.storage-download.googleapis.com/maven2/"); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); maven("https://maven-central.storage-download.googleapis.com/maven2/"); mavenCentral() }
+          }
+          rootProject.name = "VENU-AI-DIALER"
+          include(":app")
+          VENU_EOF
+
+          cat > build.gradle.kts <<'VENU_EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+          }
+          VENU_EOF
+
+          cat > gradle.properties <<'VENU_EOF'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          VENU_EOF
+
+          mkdir -p app
+          cat > app/build.gradle.kts <<'VENU_EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+
+          android {
+              namespace = "com.venu.aidialer"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.venu.aidialer"
+                  minSdk = 31
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0.0"
+              }
+
+              buildFeatures { compose = true }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+              implementation("androidx.activity:activity-compose:1.10.0")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+              debugImplementation("androidx.compose.ui:ui-tooling")
+          }
+          VENU_EOF
+
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'VENU_EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.READ_CALL_LOG" />
+              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+              <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="VENU AI DIALER"
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:usesCleartextTraffic="false">
+
+                  <activity
+                      android:name=".InCallActivity"
+                      android:exported="false"
+                      android:showWhenLocked="true"
+                      android:turnScreenOn="true"
+                      android:excludeFromRecents="true" />
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.DIAL" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:scheme="tel" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".VenuInCallService"
+                      android:permission="android.permission.BIND_INCALL_SERVICE"
+                      android:exported="true">
+                      <meta-data
+                          android:name="android.telecom.IN_CALL_SERVICE_UI"
+                          android:value="true" />
+                      <meta-data
+                          android:name="android.telecom.IN_CALL_SERVICE_RINGING"
+                          android:value="false" />
+                      <intent-filter>
+                          <action android:name="android.telecom.InCallService" />
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          VENU_EOF
+
+          mkdir -p app/src/main/java/com/venu/aidialer
+          cat > app/src/main/java/com/venu/aidialer/MainActivity.kt <<'VENU_EOF'
+          package com.venu.aidialer
+
+          import android.Manifest
+          import android.app.role.RoleManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.content.ContextCompat
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          private val Bg = Color(0xFF080B14)
+          private val Panel = Color(0xFF141B2B)
+          private val Cyan = Color(0xFF35D9FF)
+          private val Pink = Color(0xFFFF4FB8)
+          private val Purple = Color(0xFF9B75FF)
+
+          class MainActivity : ComponentActivity() {
+              private val permissionLauncher = registerForActivityResult(
+                  ActivityResultContracts.RequestMultiplePermissions()
+              ) { }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  permissionLauncher.launch(arrayOf(
+                      Manifest.permission.CALL_PHONE,
+                      Manifest.permission.READ_CONTACTS,
+                      Manifest.permission.READ_CALL_LOG,
+                      Manifest.permission.READ_PHONE_STATE,
+                      Manifest.permission.ANSWER_PHONE_CALLS
+                  ))
+                  setContent { VenuDialer(this) }
+              }
+
+              fun requestDefaultDialer() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                      val rm = getSystemService(RoleManager::class.java)
+                      if (rm.isRoleAvailable(RoleManager.ROLE_DIALER) &&
+                          !rm.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                          startActivity(rm.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                      }
+                  } else {
+                      startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                  }
+              }
+
+              fun placePhoneCall(number: String) {
+                  if (number.isBlank()) return
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+                      == PackageManager.PERMISSION_GRANTED) {
+                      startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}")))
+                  } else {
+                      startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(number)}")))
+                  }
+              }
+          }
+
+          @Composable
+          private fun VenuDialer(activity: MainActivity) {
+              val prefs = remember { activity.getSharedPreferences("venu_dialer", Context.MODE_PRIVATE) }
+              var number by remember { mutableStateOf("") }
+              var note by remember { mutableStateOf(prefs.getString("note", "") ?: "") }
+              var geminiKey by remember { mutableStateOf(prefs.getString("gemini_key", "") ?: "") }
+              var prompt by remember { mutableStateOf("") }
+              var answer by remember { mutableStateOf("Your AI assistant is ready.") }
+              var busy by remember { mutableStateOf(false) }
+              var tab by remember { mutableStateOf("Dialer") }
+
+              MaterialTheme(colorScheme = darkColorScheme(
+                  background = Bg, surface = Panel, primary = Cyan,
+                  secondary = Pink, onBackground = Color.White, onSurface = Color.White
+              )) {
+                  Column(
+                      Modifier.fillMaxSize().background(
+                          Brush.verticalGradient(listOf(Color(0xFF111A30), Bg, Color(0xFF090D19)))
+                      ).padding(18.dp)
+                  ) {
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                          Column(Modifier.weight(1f)) {
+                              Text("VENU", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                              Text("AI DIALER", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+                          }
+                          Text("● ONLINE", color = Color(0xFF5EE6A8), fontSize = 11.sp)
+                      }
+                      Spacer(Modifier.height(14.dp))
+                      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          listOf("Dialer", "Notes", "Gemini").forEach { item ->
+                              FilterChip(
+                                  selected = tab == item, onClick = { tab = item },
+                                  label = { Text(item) }
+                              )
+                          }
+                          Spacer(Modifier.weight(1f))
+                          TextButton(onClick = { activity.requestDefaultDialer() }) { Text("Set default") }
+                      }
+                      when (tab) {
+                          "Dialer" -> {
+                              Spacer(Modifier.height(12.dp))
+                              Text("SMART DIAL", color = Color.LightGray, fontSize = 11.sp)
+                              Box(
+                                  Modifier.fillMaxWidth().height(64.dp).background(Panel, RoundedCornerShape(18.dp)).padding(12.dp),
+                                  contentAlignment = Alignment.Center
+                              ) {
+                                  Text(number.ifEmpty { "Enter phone number" }, color = Color.White, fontSize = 25.sp, textAlign = TextAlign.Center)
+                              }
+                              Spacer(Modifier.height(14.dp))
+                              val keys = listOf(
+                                  listOf("1", "2", "3"), listOf("4", "5", "6"),
+                                  listOf("7", "8", "9"), listOf("*", "0", "#")
+                              )
+                              keys.forEachIndexed { rowIndex, row ->
+                                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                      row.forEachIndexed { colIndex, key ->
+                                          val colors = listOf(Cyan, Purple, Pink, Color(0xFFFFB454), Color(0xFF55D6A5), Color(0xFF6E9BFF))
+                                          val c = colors[(rowIndex * 3 + colIndex) % colors.size]
+                                          Box(
+                                              Modifier.padding(vertical = 5.dp).size(76.dp)
+                                                  .background(Brush.linearGradient(listOf(c.copy(alpha = .30f), Panel)), CircleShape)
+                                                  .clickable { number += key },
+                                              contentAlignment = Alignment.Center
+                                          ) { Text(key, color = c, fontSize = 29.sp, fontWeight = FontWeight.Bold) }
+                                      }
+                                  }
+                              }
+                              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                                  TextButton(onClick = { if (number.isNotEmpty()) number = number.dropLast(1) }) { Text("⌫ Delete") }
+                                  Button(
+                                      onClick = { activity.placePhoneCall(number) },
+                                      colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16C784)),
+                                      modifier = Modifier.size(76.dp),
+                                      shape = CircleShape
+                                  ) { Text("☎", fontSize = 27.sp) }
+                                  TextButton(onClick = { number = "" }) { Text("Clear") }
+                              }
+                              Spacer(Modifier.height(10.dp))
+                              OutlinedButton(onClick = { activity.requestDefaultDialer() }, modifier = Modifier.fillMaxWidth()) {
+                                  Text("Make VENU AI DIALER your default phone app")
+                              }
+                          }
+                          "Notes" -> {
+                              Spacer(Modifier.height(18.dp))
+                              Text("NUMBER NOTEPAD", color = Cyan, fontWeight = FontWeight.Bold)
+                              OutlinedTextField(
+                                  value = note, onValueChange = { note = it; prefs.edit().putString("note", it).apply() },
+                                  modifier = Modifier.fillMaxWidth().height(220.dp),
+                                  label = { Text("Save numbers, names and reminders") }
+                              )
+                              Text("Saved automatically on this device", color = Color.LightGray, fontSize = 12.sp)
+                          }
+                          else -> {
+                              Spacer(Modifier.height(12.dp))
+                              Text("GEMINI AI ASSISTANT", color = Cyan, fontWeight = FontWeight.Bold)
+                              OutlinedTextField(
+                                  value = geminiKey, onValueChange = { geminiKey = it; prefs.edit().putString("gemini_key", it).apply() },
+                                  modifier = Modifier.fillMaxWidth(), label = { Text("Gemini API key") }
+                              )
+                              OutlinedTextField(
+                                  value = prompt, onValueChange = { prompt = it },
+                                  modifier = Modifier.fillMaxWidth(), label = { Text("Ask Gemini") }
+                              )
+                              Button(
+                                  onClick = {
+                                      if (geminiKey.isBlank() || prompt.isBlank()) {
+                                          answer = "Enter your Gemini API key and a question."
+                                      } else {
+                                          busy = true
+                                          thread {
+                                              val result = askGemini(geminiKey, prompt)
+                                              activity.runOnUiThread { answer = result; busy = false }
+                                          }
+                                      }
+                                  },
+                                  enabled = !busy, modifier = Modifier.fillMaxWidth()
+                              ) { Text(if (busy) "Thinking…" else "Ask Gemini") }
+                              Text(answer, color = Color.White, modifier = Modifier.padding(top = 14.dp))
+                              Text("For personal testing only: an API key stored in the app can be extracted. A secure backend is recommended before public release.", color = Color(0xFFFFC36B), fontSize = 11.sp)
+                          }
+                      }
+                      Spacer(Modifier.weight(1f))
+                      Text("VENU AI DIALER • Version 1.0.0", color = Color.Gray, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+                  }
+              }
+          }
+
+          private fun askGemini(apiKey: String, prompt: String): String {
+              val models = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-latest")
+              var last = ""
+              for (m in models) {
+                  try {
+                      val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent")
+                          .openConnection() as HttpURLConnection).apply {
+                          requestMethod = "POST"
+                          connectTimeout = 15000
+                          readTimeout = 40000
+                          doOutput = true
+                          setRequestProperty("Content-Type", "application/json")
+                          setRequestProperty("x-goog-api-key", apiKey.trim())
+                      }
+                      val body = JSONObject().put("contents", org.json.JSONArray().put(
+                          JSONObject().put("parts", org.json.JSONArray().put(JSONObject().put("text", prompt)))
+                      )).toString()
+                      conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                      val code = conn.responseCode
+                      val response = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                          .bufferedReader().use { it.readText() }
+                      if (code in 200..299) {
+                          return JSONObject(response).getJSONArray("candidates").getJSONObject(0)
+                          
